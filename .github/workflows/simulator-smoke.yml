@@ -1,0 +1,56 @@
+name: simulator-smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Boot simulator and check Compose first frame
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.app
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: build/DerivedData-Simulator
+          key: deriveddata-sim-${{ runner.os }}-${{ hashFiles('iosApp/iosApp.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            deriveddata-sim-${{ runner.os }}-
+
+      - name: Run simulator smoke test
+        id: smoke
+        run: bash .github/scripts/simulator-smoke.sh
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recstar-simulator-smoke
+          path: ci-artifacts/
