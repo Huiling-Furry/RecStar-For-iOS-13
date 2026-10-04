@@ -14,7 +14,7 @@
 | 维度 | 状态 |
 | --- | --- |
 | 可执行文件 `minos`（LC_BUILD_VERSION / LC_VERSION_MIN_IPHONEOS） | 由 Xcode 的 `IPHONEOS_DEPLOYMENT_TARGET=13.0` 控制，已全部改完 |
-| 链接的系统框架是否 iOS 14+ 才有 | `AVFAudio` 已换成 `AVFoundation`；`UniformTypeIdentifiers`、`SwiftUI` 已清零 |
+| 链接的系统框架是否 iOS 14+ 才有 | Kotlin/Native 1.9.20 在音频 API 上需要 `platform.AVFAudio` 绑定，但工程仍只链接 `AVFoundation`；`UniformTypeIdentifiers`、`SwiftUI` 已清零 |
 | 运行期调用的 API 可用性 | 源码里 iOS 端用到的 API 全部是 iOS 13 及更早的（见第三节） |
 
 ---
@@ -68,21 +68,24 @@ BuildKonfig requires Gradle 8.14 or later, but is applied to 8.7.
 | `iosApp/iosApp/LaunchScreen.storyboard` | **新增** | iOS 13 需要 storyboard 形式的启动图 |
 | `shared/src/iosMain/kotlin/io/Uti.kt` | `UTType`（`UniformTypeIdentifiers`，**iOS 14+**）→ UTI 字符串常量：`public.text` / `public.audio` / `public.data` | 去掉 iOS 14+ 框架依赖 |
 | `shared/src/iosMain/kotlin/io/FileInteractor.kt` | `UIDocumentPickerViewController(forOpeningContentTypes:asCopy:)`（**iOS 14+**）→ `UIDocumentPickerViewController(documentTypes:inMode: UIDocumentPickerModeImport)`（iOS 8+） | 同上 |
-| `shared/src/iosMain/kotlin/audio/AudioSession.kt`<br>`audio/AudioPlayer.kt`<br>`audio/AudioRecorder.kt`<br>`audio/AVAudioPlayerDelegate.kt` | `import platform.AVFAudio.*` → `import platform.AVFoundation.*` | **本次最关键的一处**，详见第三节 |
+| `shared/src/iosMain/kotlin/audio/AudioSession.kt`<br>`audio/AudioPlayer.kt`<br>`audio/AudioRecorder.kt`<br>`audio/AVAudioPlayerDelegate.kt` | 按 Kotlin/Native 1.9.20 的真实 SDK bindings 使用 `platform.AVFAudio.*`；工程链接仍保持 `AVFoundation` | **本次最关键的一处**，详见第三节 |
 | `shared/src/iosMain/kotlin/ui/model/ProvideSafeAreaInsets.kt` | 改为监听 `SafeAreaDidChange` 通知来更新安全区 | 配合 AppDelegate 的 UIKit 化改造 |
 | `.github/workflows/build-ios-ipa.yml` | **新增**：macOS runner 上构建并产出 IPA，支持可选签名 | 本机无法编译时的替代方案 |
 
 ---
 
-## 三、重点解释：`AVFAudio` → `AVFoundation`
+## 三、重点解释：Kotlin/Native 的 AVFAudio binding 与 iOS 13
 
-这是最容易踩的坑，也是唯一一个"编译得过、装不上就崩"的点。
+GitHub macOS Runner 的真实编译证明：在 Kotlin/Native 1.9.20 + Xcode 16 SDK 下，`AVAudioSession`、`AVAudioPlayer`、`AVAudioRecorder`、`AVAudioEngine` 等符号必须从 `platform.AVFAudio` 导入；写成 `platform.AVFoundation` 会直接出现 `Unresolved reference`，因此不能只按静态源码判断。
 
-- `AVFAudio` 是一个**独立的系统框架，iOS 14.5 才出现**（Apple 官方文档）。如果可执行文件里链接了 `-framework AVFAudio`，在 iOS 13 上启动时 dyld 就会报 `Library not loaded` 直接闪退。
-- 但 `AVAudioSession` / `AVAudioPlayer` / `AVAudioRecorder` / `AVAudioEngine` / `AVAudioPCMBuffer` 以及 `AVSampleRateKey` 这一类设置键，**在 iOS 13 时代就全部属于 `AVFoundation`**（`AVAudioSession` 本身是 iOS 3.0+，`AVAudioEngine` 是 iOS 8.0+）。
-- Kotlin/Native 的 `AVFoundation.def` 里 `headerFilter` 已经包含 `AVFAudio/**`，而 `linkerOpts` 只有 `-framework AVFoundation`。也就是说这些符号在 `platform.AVFoundation` 下**本来就存在**，只是原代码走了 `platform.AVFAudio` 这条会引入独立框架的导入路径。
+这不等于工程必须链接一个 iOS 14+ 的二进制框架：iOS 13 SDK 已在 AVFoundation 的框架目录中提供 AVFAudio 相关 headers，工程 linker 仍保持 `linkerOpts("-framework", "AVFoundation")`。最终是否存在运行期最低系统问题，必须以 archive 后的 `otool -L` 和 iOS 13 真机测试为准。
 
-所以换导入既解决编译，也解决加载——这是**根因修复**，不是绕过。
+因此本次修复分为两部分：
+
+1. Kotlin 源码使用 Kotlin/Native SDK 实际提供的 `platform.AVFAudio` binding，保证 macOS 真编译通过；
+2. Xcode 工程继续只链接 `AVFoundation`，并在 CI 中检查是否意外出现 `UniformTypeIdentifiers` 或 `SwiftUI`。
+
+此前文档把“binding 模块名”和“最终链接的系统 framework”混为一谈，已更正。
 
 ---
 
@@ -187,7 +190,7 @@ PRODUCT_BUNDLE_IDENTIFIER = "${BUNDLE_ID}${TEAM_ID}"
 | Kotlin 实际编译 | `./gradlew :shared:compileKotlinDesktop` | **BUILD SUCCESSFUL**，`generateBuildKonfig` 正常执行 |
 | 插件版本落定 | `./gradlew :shared:buildEnvironment` | `buildkonfig-gradle-plugin:0.15.1`、`plugin.serialization:1.9.20` |
 | iOS target 与 framework 任务 | `./gradlew :shared:tasks -Dos.name="Mac OS X"` | `iosArm64 / iosX64 / iosSimulatorArm64` 均创建成功，`embedAndSignAppleFrameworkForXcode`、`iosX64MainBinaries` 存在 |
-| iOS 源码无 14+ API | 全仓搜索 `SwiftUI\|AVFAudio\|UniformTypeIdentifiers\|UTType\|UIApplicationSceneManifest` | 仅命中一处注释文字，无真实引用 |
+| iOS 源码不含 SwiftUI/UTType API | 全仓搜索 `SwiftUI\|UniformTypeIdentifiers\|UTType\|UIApplicationSceneManifest` | 无真实引用；`platform.AVFAudio` 仅作为 Kotlin/Native 1.9.20 的音频 binding |
 
 最后一项的 iOS 验证用 `-Dos.name="Mac OS X"` 骗过 `shared/build.gradle.kts` 里的 `isMac` 判断，从而在不改代码的前提下让 iOS target 参与配置——这样能验证配置路径，但**编译 iOS 产物仍然需要真 Mac + Xcode**。
 
@@ -243,9 +246,39 @@ PRODUCT_BUNDLE_IDENTIFIER = "${BUNDLE_ID}${TEAM_ID}"
 - 已授权状态下不再弹窗，一次点击直接开始录音。
 - 用户拒绝后，系统仍允许再次请求时可以重试；系统不再允许请求时显示手动授权提示。
 
-## 十、GitHub Actions 已签名 IPA 打包
+## 十、GitHub Actions 生成未签名 IPA（适合爱思助手/i4）
 
-使用：`.github/workflows/build-ios-ipa.yml` → GitHub Actions → **Build iOS IPA (iOS 13)** → Run workflow，然后设置：
+针对免费 Apple ID + Windows 爱思助手/i4，使用新增的：
+
+```text
+.github/workflows/build-ios-unsigned.yml
+```
+
+打开 GitHub Actions → **Build iOS 13 Unsigned IPA** → Run workflow，然后设置：
+
+```text
+configuration = Release
+ios_deployment_target = 13.0
+```
+
+这个 workflow **不读取证书、不读取 Team ID、不做 CI 内 Apple 签名**，只在 GitHub macOS Runner 上：
+
+1. 编译 Kotlin/Native iOS framework；
+2. 用 Xcode 归档未签名 App；
+3. 校验最低版本和系统框架；
+4. 打包并上传：
+
+```text
+RecStar-iOS13-unsigned-ipa
+```
+
+下载这个 artifact 后，在 Windows 爱思助手/i4 中使用 Apple ID 进行个人签名。个人签名通常受 Apple 的 7 天有效期和设备限制影响。
+
+注意：未签名 IPA **不能直接安装**，必须经过爱思助手/i4 或其他重签名工具处理。
+
+## 十一、GitHub Actions 已签名 IPA 打包
+
+仍然保留 `.github/workflows/build-ios-ipa.yml` 作为需要 Apple Developer 证书和 provisioning profile 的官方签名路线。使用：`.github/workflows/build-ios-ipa.yml` → GitHub Actions → **Build iOS IPA (iOS 13)** → Run workflow，然后设置：
 
 ```text
 sign = true
@@ -283,7 +316,7 @@ workflow 现在会在上传前校验：
 
 ---
 
-## 十一、有意未改的 API 警告
+## 十二、有意未改的 API 警告
 
 以下 API 仍然保留，因为它们在 iOS 13 可用，只会产生弃用警告，不影响最低版本兼容：
 

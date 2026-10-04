@@ -9,7 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import platform.AVFoundation.AVAudioPlayer
+import platform.AVFAudio.AVAudioPlayer
 import repository.AppPreferenceRepository
 import ui.common.ErrorNotifier
 import ui.model.AppContext

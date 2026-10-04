@@ -1,0 +1,131 @@
+name: Build iOS 13 Unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Xcode build configuration"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+      ios_deployment_target:
+        description: "iOS deployment target"
+        required: true
+        default: "13.0"
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned:
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Select Xcode 16
+        run: |
+          set -euo pipefail
+          selected=""
+          for v in 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_${v}.app" ]; then
+              selected="/Applications/Xcode_${v}.app"
+              break
+            fi
+          done
+          if [ -z "$selected" ]; then
+            echo "::error::Xcode 16.x was not found on this runner"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$selected"
+          xcodebuild -version
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "corretto"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Check dependency lockfiles
+        run: |
+          set -euo pipefail
+          find . -name gradle.lockfile -not -path './.gradle/*' -print | sort
+
+      - name: Compile iOS Kotlin framework
+        env:
+          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-ci
+        run: |
+          set -euo pipefail
+          ./gradlew :shared:compileKotlinIosArm64 -Dos.name="Mac OS X"
+
+      - name: Archive unsigned app
+        working-directory: iosApp
+        env:
+          TARGET: ${{ inputs.ios_deployment_target }}
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET" == "13.0" ]] || { echo "::error::This workflow is locked to iOS 13.0"; exit 1; }
+          xcodebuild archive \
+            -project iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/RecStar-unsigned.xcarchive" \
+            IPHONEOS_DEPLOYMENT_TARGET="$TARGET" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            -quiet
+
+      - name: Validate unsigned archive
+        working-directory: iosApp
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/RecStar-unsigned.xcarchive/Products/Applications/RecStar.app"
+          test -d "$APP"
+          MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
+          [[ "$MIN_OS" == "13.0" ]] || { echo "::error::MinimumOSVersion is $MIN_OS"; exit 1; }
+          if [ -f "$APP/embedded.mobileprovision" ]; then
+            echo "::error::Unsigned archive unexpectedly contains a provisioning profile"
+            exit 1
+          fi
+          if codesign --verify --deep --strict "$APP" 2>/dev/null; then
+            echo "::error::Unsigned archive unexpectedly has a valid code signature"
+            exit 1
+          fi
+          if otool -L "$APP/RecStar" | grep -i -E "UniformTypeIdentifiers|SwiftUI"; then
+            echo "::error::An iOS 14+ framework is linked"
+            exit 1
+          fi
+          echo "Unsigned archive validated for iOS 13"
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/RecStar-unsigned.xcarchive/Products/Applications/RecStar.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/RecStar-iOS13-unsigned.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/RecStar-iOS13-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RecStar-iOS13-unsigned-ipa
+          path: RecStar-iOS13-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

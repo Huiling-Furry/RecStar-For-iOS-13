@@ -1,7 +1,7 @@
 package audio
 
-import platform.AVFoundation.AVAudioPlayer
-import platform.AVFoundation.AVAudioPlayerDelegateProtocol
+import platform.AVFAudio.AVAudioPlayer
+import platform.AVFAudio.AVAudioPlayerDelegateProtocol
 import platform.Foundation.NSError
 import platform.darwin.NSObject
 import util.Log

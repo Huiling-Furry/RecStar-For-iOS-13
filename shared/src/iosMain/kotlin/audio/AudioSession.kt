@@ -1,15 +1,15 @@
 package audio
 
 import kotlinx.cinterop.ExperimentalForeignApi
-import platform.AVFoundation.AVAudioSession
-import platform.AVFoundation.AVAudioSessionCategoryOptionAllowBluetooth
-import platform.AVFoundation.AVAudioSessionCategoryOptionAllowBluetoothA2DP
-import platform.AVFoundation.AVAudioSessionCategoryPlayAndRecord
-import platform.AVFoundation.AVAudioSessionModeDefault
-import platform.AVFoundation.AVAudioSessionPortBuiltInMic
-import platform.AVFoundation.AVAudioSessionPortDescription
-import platform.AVFoundation.availableInputs
-import platform.AVFoundation.setActive
+import platform.AVFAudio.AVAudioSession
+import platform.AVFAudio.AVAudioSessionCategoryOptionAllowBluetooth
+import platform.AVFAudio.AVAudioSessionCategoryOptionAllowBluetoothA2DP
+import platform.AVFAudio.AVAudioSessionCategoryPlayAndRecord
+import platform.AVFAudio.AVAudioSessionModeDefault
+import platform.AVFAudio.AVAudioSessionPortBuiltInMic
+import platform.AVFAudio.AVAudioSessionPortDescription
+import platform.AVFAudio.availableInputs
+import platform.AVFAudio.setActive
 import repository.AppPreferenceRepository
 import util.Log
 import util.withNSError

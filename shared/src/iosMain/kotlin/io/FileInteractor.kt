@@ -17,7 +17,7 @@ import platform.UIKit.UIActivityTypeSaveToCameraRoll
 import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIApplication
 import platform.UIKit.UIDevice
-import platform.UIKit.UIDocumentPickerModeImport
+import platform.UIKit.UIDocumentPickerMode
 import platform.UIKit.UIDocumentPickerViewController
 import platform.UIKit.UIPopoverArrowDirectionAny
 import platform.UIKit.UIUserInterfaceIdiomPad
@@ -76,7 +76,7 @@ actual class FileInteractor actual constructor(
         val types = Uti.mapExtensions(allowedExtensions)
         val documentPicker = UIDocumentPickerViewController(
             documentTypes = types,
-            inMode = UIDocumentPickerModeImport,
+            inMode = UIDocumentPickerMode.UIDocumentPickerModeImport,
         )
         documentPicker.delegate = documentPickerDelegate
         context.coroutineScope.launch(Dispatchers.Main) {
