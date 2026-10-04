@@ -59,7 +59,7 @@ jobs:
       METHOD: ${{ inputs.export_method }}
       BUNDLE_ID: ${{ inputs.bundle_id }}
       TEAM_ID: ${{ secrets.TEAM_ID }}
-      KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
+      KEYCHAIN_PATH: ${{ github.workspace }}/app-signing.keychain-db
 
     steps:
       - uses: actions/checkout@v4
@@ -243,6 +243,8 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -quiet
+          mkdir -p "$GITHUB_WORKSPACE/ci-artifacts/signed"
+          cp "$RUNNER_TEMP/export"/*.ipa "$GITHUB_WORKSPACE/ci-artifacts/signed/"
           ls -lh "$RUNNER_TEMP/export"
 
       - name: Validate archived app
@@ -323,6 +325,8 @@ jobs:
           cp -R "$RUNNER_TEMP/RecStar.xcarchive/Products/Applications/RecStar.app" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
           zip -qry "RecStar-unsigned.ipa" Payload
+          mkdir -p "$GITHUB_WORKSPACE/ci-artifacts"
+          cp "RecStar-unsigned.ipa" "$GITHUB_WORKSPACE/ci-artifacts/RecStar-unsigned.ipa"
           ls -lh "RecStar-unsigned.ipa"
 
       - name: Upload unsigned IPA
@@ -330,7 +334,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RecStar-iOS13-unsigned-ipa
-          path: ${{ runner.temp }}/ipa/RecStar-unsigned.ipa
+          path: ${{ github.workspace }}/ci-artifacts/RecStar-unsigned.ipa
           if-no-files-found: error
 
       - name: Upload signed IPA
@@ -338,7 +342,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RecStar-iOS13-signed-ipa
-          path: ${{ runner.temp }}/export/*.ipa
+          path: ${{ github.workspace }}/ci-artifacts/signed/*.ipa
           if-no-files-found: error
 
       - name: Clean up keychain
