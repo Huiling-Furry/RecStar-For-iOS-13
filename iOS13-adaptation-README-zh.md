@@ -276,6 +276,26 @@ RecStar-iOS13-unsigned-ipa
 
 注意：未签名 IPA **不能直接安装**，必须经过爱思助手/i4 或其他重签名工具处理。CI 会检查最低系统版本、Bundle ID、版本号、未签名状态以及 `SwiftUI`/`UniformTypeIdentifiers` 链接；但 Compose/Skiko 的触摸、旋转、音频和页面生命周期仍必须在真实 iOS 13 设备上验收。
 
+### 免费 Apple ID + 爱思助手/i4 签名的实际限制
+
+这条路能解决"装得上"，但有明确天花板，请按这个预期使用：
+
+| 限制 | 说明 |
+| --- | --- |
+| 有效期 | Apple 对个人签名通常给 **7 天**，过期后 App 打不开，需要重新签名安装 |
+| 设备数 | 免费账号每年最多注册少量 UDID，名额有限 |
+| entitlements | 重签名会改写 entitlements，`get-task-allow` 之外的能力（如后台音频、iCloud）可能被丢弃 |
+| Bundle ID | 重签名可能改写 Bundle ID，麦克风授权会重新弹一次 |
+| 后台能力 | 个人签名下 `UIBackgroundModes: audio` 的实际行为不能完全保证 |
+| 不可证明兼容性 | 签名成功 ≠ iOS 13 能跑，运行时仍要靠真机验收 |
+
+如果你需要一个能长期分发、后台能力稳定的版本，只能走付费 Apple Developer 账号 + 正式 App ID + provisioning profile（即第十一节的签名路线）。
+
+### 真机验收
+
+签名安装后请按 `docs/iOS13-device-acceptance.md` 逐项验收。该文件明确区分了
+"CI 已验证的静态项"和"只有真机能验证的运行时项"，并说明崩溃日志怎么抓。
+
 ## 十一、GitHub Actions 已签名 IPA 打包
 
 仍然保留 `.github/workflows/build-ios-ipa.yml` 作为需要 Apple Developer 证书和 provisioning profile 的官方签名路线。使用：`.github/workflows/build-ios-ipa.yml` → GitHub Actions → **Build iOS IPA (iOS 13)** → Run workflow，然后设置：

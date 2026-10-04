@@ -119,11 +119,25 @@ jobs:
           fi
           LINKED_FRAMEWORKS="$(otool -L "$BINARY")"
           printf '%s\n' "$LINKED_FRAMEWORKS"
-          if printf '%s\n' "$LINKED_FRAMEWORKS" | grep -i -E "UniformTypeIdentifiers|SwiftUI"; then
-            echo "::error::An iOS 14+ framework is linked"
+          # Only frameworks introduced AFTER iOS 13 are a problem, and only when
+          # they are NOT weakly linked. Xcode marks frameworks newer than the
+          # deployment target as weak, and the Swift toolchain always injects
+          # libswift*.dylib support libraries as weak too, so both are safe on
+          # iOS 13. SwiftUI itself shipped with iOS 13 and is therefore allowed.
+          IOS14_FRAMEWORKS="UniformTypeIdentifiers|WidgetKit|AppIntents|ActivityKit|Charts|SwiftData|Translation|Observation|MusicKit|NearbyInteraction"
+          HARD_LINKED="$(printf '%s\n' "$LINKED_FRAMEWORKS" | grep -E "($IOS14_FRAMEWORKS)\.framework" | grep -v "weak" || true)"
+          if [ -n "$HARD_LINKED" ]; then
+            echo "::error::An iOS 14+ framework is linked without weak linking:"
+            printf '%s\n' "$HARD_LINKED"
             exit 1
           fi
-          vtool -show-build "$BINARY"
+          vtool -show-build "$BINARY" || true
+          MINOS="$(vtool -show-build "$BINARY" 2>/dev/null | awk '/minos/ {print $2}' | head -1)"
+          echo "Binary minos: ${MINOS:-unknown}"
+          if [ -n "$MINOS" ] && [ "$MINOS" != "13.0" ]; then
+            echo "::error::Binary minos is $MINOS, expected 13.0"
+            exit 1
+          fi
           echo "Unsigned archive validated for iOS 13; Compose/Skiko still requires device runtime testing."
 
       - name: Package unsigned IPA
