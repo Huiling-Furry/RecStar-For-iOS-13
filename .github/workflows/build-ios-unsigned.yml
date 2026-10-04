@@ -1,6 +1,9 @@
 name: Build iOS 13 Unsigned IPA
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       configuration:
