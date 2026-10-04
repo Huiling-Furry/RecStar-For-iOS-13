@@ -1,9 +1,6 @@
 name: Build iOS 13 Unsigned IPA
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       configuration:
@@ -75,8 +72,8 @@ jobs:
       - name: Archive unsigned app
         working-directory: iosApp
         env:
-          TARGET: ${{ inputs.ios_deployment_target }}
-          CONFIGURATION: ${{ inputs.configuration }}
+          TARGET: ${{ inputs.ios_deployment_target || '13.0' }}
+          CONFIGURATION: ${{ inputs.configuration || 'Release' }}
         run: |
           set -euo pipefail
           [[ "$TARGET" == "13.0" ]] || { echo "::error::This workflow is locked to iOS 13.0"; exit 1; }
@@ -137,20 +134,7 @@ jobs:
           cd "$RUNNER_TEMP/ipa"
           mkdir -p "$GITHUB_WORKSPACE/ci-artifacts"
           zip -qry "$GITHUB_WORKSPACE/ci-artifacts/RecStar-iOS13-unsigned.ipa" Payload
-          cat > "$GITHUB_WORKSPACE/ci-artifacts/i4-signing-guide.txt" <<'EOF'
-RecStar iOS 13 unsigned IPA
-
-1. Download RecStar-iOS13-unsigned.ipa from this artifact.
-2. On Windows, open 爱思助手/i4 and choose the IPA signing or personal-signing function.
-3. Select the downloaded IPA and sign with your own Apple ID.
-4. Install the signed result on a registered device.
-
-Important:
-- This IPA is intentionally unsigned and cannot be installed directly.
-- Free Apple ID signing is controlled by Apple and commonly expires after about 7 days.
-- Re-signing may change the final Bundle ID and entitlements; grant microphone permission again after installation.
-- Personal signing does not prove iOS 13 device runtime compatibility. Test recording, playback, file picker, rotation and interruptions on a real iOS 13 device.
-EOF
+          cp "$GITHUB_WORKSPACE/ci/i4-signing-guide.txt" "$GITHUB_WORKSPACE/ci-artifacts/i4-signing-guide.txt"
           ls -lh "$GITHUB_WORKSPACE/ci-artifacts"
 
       - name: Upload unsigned IPA and i4 guide
