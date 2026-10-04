@@ -39,20 +39,24 @@ jobs:
           java-version: "21"
           distribution: "corretto"
 
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', '**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
       - name: Generate lockfile on macOS
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-ci
         run: |
           set -euo pipefail
-          rm -f gradle.lockfile
-          # Configure every source set, including iOS, before writing locks.
-          ./gradlew projects :shared:tasks -Dos.name="Mac OS X"
-          ./gradlew --write-locks --refresh-dependencies \
-            :shared:dependencies \
-            :shared:iosArm64MainBinaries \
-            :shared:iosSimulatorArm64MainBinaries \
-            :shared:iosX64MainBinaries \
-            :shared:compileKotlinDesktop
+          rm -f gradle.lockfile shared/gradle.lockfile
+          # Resolving the configurations is enough to write locks. Building the
+          # Kotlin/Native binaries here would add 20+ minutes for no benefit.
+          ./gradlew --write-locks --refresh-dependencies :shared:dependencies -Dos.name="Mac OS X"
           find . -name gradle.lockfile -not -path './.gradle/*' -print | sort > "$RUNNER_TEMP/lockfiles.txt"
           test -s "$RUNNER_TEMP/lockfiles.txt" || {
             echo "::error::No Gradle lockfile was generated"
