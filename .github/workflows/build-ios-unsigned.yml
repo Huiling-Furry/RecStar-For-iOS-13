@@ -96,9 +96,19 @@ jobs:
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/RecStar-unsigned.xcarchive/Products/Applications/RecStar.app"
+          INFO="$APP/Info.plist"
+          BINARY="$APP/RecStar"
           test -d "$APP"
-          MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
+          MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")"
+          VERSION_CODE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")"
+          EXPECTED_VERSION="$(awk -F= '/^app.versionName=/ {print $2}' ../gradle.properties)"
+          EXPECTED_VERSION_CODE="$(awk -F= '/^app.versionCode=/ {print $2}' ../gradle.properties)"
           [[ "$MIN_OS" == "13.0" ]] || { echo "::error::MinimumOSVersion is $MIN_OS"; exit 1; }
+          [[ "$BUNDLE_ID" == "com.sdercolin.recstar" ]] || { echo "::error::Unexpected unsigned Bundle ID: $BUNDLE_ID"; exit 1; }
+          [[ "$VERSION" == "$EXPECTED_VERSION" ]] || { echo "::error::Unexpected app version: $VERSION"; exit 1; }
+          [[ "$VERSION_CODE" == "$EXPECTED_VERSION_CODE" ]] || { echo "::error::Unexpected app version code: $VERSION_CODE"; exit 1; }
           if [ -f "$APP/embedded.mobileprovision" ]; then
             echo "::error::Unsigned archive unexpectedly contains a provisioning profile"
             exit 1
@@ -107,11 +117,14 @@ jobs:
             echo "::error::Unsigned archive unexpectedly has a valid code signature"
             exit 1
           fi
-          if otool -L "$APP/RecStar" | grep -i -E "UniformTypeIdentifiers|SwiftUI"; then
+          LINKED_FRAMEWORKS="$(otool -L "$BINARY")"
+          printf '%s\n' "$LINKED_FRAMEWORKS"
+          if printf '%s\n' "$LINKED_FRAMEWORKS" | grep -i -E "UniformTypeIdentifiers|SwiftUI"; then
             echo "::error::An iOS 14+ framework is linked"
             exit 1
           fi
-          echo "Unsigned archive validated for iOS 13"
+          vtool -show-build "$BINARY"
+          echo "Unsigned archive validated for iOS 13; Compose/Skiko still requires device runtime testing."
 
       - name: Package unsigned IPA
         run: |
@@ -119,13 +132,28 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/RecStar-unsigned.xcarchive/Products/Applications/RecStar.app" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
-          zip -qry "$GITHUB_WORKSPACE/RecStar-iOS13-unsigned.ipa" Payload
-          ls -lh "$GITHUB_WORKSPACE/RecStar-iOS13-unsigned.ipa"
+          mkdir -p "$GITHUB_WORKSPACE/ci-artifacts"
+          zip -qry "$GITHUB_WORKSPACE/ci-artifacts/RecStar-iOS13-unsigned.ipa" Payload
+          cat > "$GITHUB_WORKSPACE/ci-artifacts/i4-signing-guide.txt" <<'EOF'
+RecStar iOS 13 unsigned IPA
 
-      - name: Upload unsigned IPA
+1. Download RecStar-iOS13-unsigned.ipa from this artifact.
+2. On Windows, open 爱思助手/i4 and choose the IPA signing or personal-signing function.
+3. Select the downloaded IPA and sign with your own Apple ID.
+4. Install the signed result on a registered device.
+
+Important:
+- This IPA is intentionally unsigned and cannot be installed directly.
+- Free Apple ID signing is controlled by Apple and commonly expires after about 7 days.
+- Re-signing may change the final Bundle ID and entitlements; grant microphone permission again after installation.
+- Personal signing does not prove iOS 13 device runtime compatibility. Test recording, playback, file picker, rotation and interruptions on a real iOS 13 device.
+EOF
+          ls -lh "$GITHUB_WORKSPACE/ci-artifacts"
+
+      - name: Upload unsigned IPA and i4 guide
         uses: actions/upload-artifact@v4
         with:
           name: RecStar-iOS13-unsigned-ipa
-          path: RecStar-iOS13-unsigned.ipa
+          path: ci-artifacts/*
           if-no-files-found: error
           retention-days: 30

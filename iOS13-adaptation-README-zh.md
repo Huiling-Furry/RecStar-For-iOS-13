@@ -272,9 +272,9 @@ ios_deployment_target = 13.0
 RecStar-iOS13-unsigned-ipa
 ```
 
-下载这个 artifact 后，在 Windows 爱思助手/i4 中使用 Apple ID 进行个人签名。个人签名通常受 Apple 的 7 天有效期和设备限制影响。
+下载这个 artifact 后，在 Windows 爱思助手/i4 中使用 Apple ID 进行个人签名。artifact 里还会附带 `i4-signing-guide.txt`，列出签名和安装注意事项。个人签名通常受 Apple 的 7 天有效期和设备限制影响。
 
-注意：未签名 IPA **不能直接安装**，必须经过爱思助手/i4 或其他重签名工具处理。
+注意：未签名 IPA **不能直接安装**，必须经过爱思助手/i4 或其他重签名工具处理。CI 会检查最低系统版本、Bundle ID、版本号、未签名状态以及 `SwiftUI`/`UniformTypeIdentifiers` 链接；但 Compose/Skiko 的触摸、旋转、音频和页面生命周期仍必须在真实 iOS 13 设备上验收。
 
 ## 十一、GitHub Actions 已签名 IPA 打包
 
