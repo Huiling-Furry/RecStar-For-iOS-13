@@ -1,0 +1,42 @@
+RecStar iOS 13 unsigned IPA - local signing guide
+================================================
+
+This artifact was produced by GitHub Actions on a macOS runner.
+It contains RecStar-iOS13-unsigned.ipa, which is deliberately NOT signed
+and therefore CANNOT be installed on a device as-is.
+
+What CI already verified
+------------------------
+- MinimumOSVersion = 13.0
+- CFBundleIdentifier = com.sdercolin.recstar
+- CFBundleShortVersionString / CFBundleVersion match gradle.properties
+- No embedded.mobileprovision is present
+- The app carries no valid code signature
+- No iOS 14+ framework (SwiftUI / UniformTypeIdentifiers) is linked
+- Build was produced with Xcode 16.x against an iPhoneOS SDK
+
+What CI did NOT verify (you must check on a real device)
+--------------------------------------------------------
+- Compose Multiplatform 1.5.10 / Skiko runtime behaviour on iOS 13
+- Recording, playback, file picker, rotation, permission prompts
+- Audio session interruption handling (phone call, Siri, other apps)
+
+How to sign on Windows with 爱思助手 / i4
+----------------------------------------
+1. Download RecStar-iOS13-unsigned.ipa from this artifact.
+2. Open 爱思助手 (i4 assistant) on Windows.
+3. Use the IPA signing / personal signing (个人签名) function.
+4. Select the downloaded IPA and sign it with your own Apple ID.
+5. Install the signed result onto a device that is registered to that Apple ID.
+
+Important caveats
+-----------------
+- Free Apple ID personal signing is controlled by Apple and commonly
+  expires after about 7 days. Re-sign and reinstall after expiry.
+- Re-signing may rewrite the Bundle ID and entitlements. If the Bundle ID
+  changes, the microphone permission prompt will appear again.
+- Personal signing cannot prove iOS 13 runtime compatibility. Please test
+  recording, playback, file picker, rotation and audio interruptions on a
+  real iOS 13 device before trusting the build.
+- If you need a stable, long-lived signature, use a paid Apple Developer
+  account with an explicit App ID and provisioning profile instead.
