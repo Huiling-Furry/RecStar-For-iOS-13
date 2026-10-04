@@ -14,3 +14,8 @@ iosApp/iosApp.xcodeproj/*
 !iosApp/iosApp.xcodeproj/project.pbxproj
 shared/shared.podspec
 LocalConfig.xcconfig
+
+# Build artifacts produced locally / downloaded from CI
+ipa-out/
+lock-out/
+ci-artifacts/
