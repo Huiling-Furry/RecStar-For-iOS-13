@@ -57,6 +57,26 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Kotlin/Native toolchain downloads are ~1GB and are NOT covered by the
+      # Gradle cache. Caching them removes several minutes from every rerun.
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', '**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
+      # Xcode intermediate build products. Makes re-archiving much faster.
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: deriveddata-${{ runner.os }}-${{ hashFiles('iosApp/iosApp.xcodeproj/project.pbxproj', 'iosApp/iosApp/*.swift', 'iosApp/iosApp/Info.plist') }}
+          restore-keys: |
+            deriveddata-${{ runner.os }}-
+
       - name: Check dependency lockfiles
         run: |
           set -euo pipefail
