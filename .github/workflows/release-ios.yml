@@ -1,0 +1,99 @@
+name: Release iOS
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        run: |
+          APP_VERSION=$(awk -F'=' '/^app.versionName/ {print $2}' gradle.properties)
+          APP_VERSION_CODE=$(awk -F'=' '/^app.versionCode/ {print $2}' gradle.properties)
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG=${{ github.ref_name }}
+            if [ "$TAG" != "$APP_VERSION" ]; then
+              echo "Tag $TAG does not match app version $APP_VERSION"
+              exit 1
+            fi
+          fi
+          PLIST_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" iosApp/iosApp/Info.plist)
+          PLIST_CODE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" iosApp/iosApp/Info.plist)
+          if [ "$PLIST_VERSION" != "$APP_VERSION" ] || [ "$PLIST_CODE" != "$APP_VERSION_CODE" ]; then
+            echo "::error::Info.plist version ($PLIST_VERSION/$PLIST_CODE) does not match gradle.properties ($APP_VERSION/$APP_VERSION_CODE)"
+            exit 1
+          fi
+
+      - name: Set Flavor
+        run: echo "buildkonfig.flavor=release" >> gradle.properties
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Install Distribution Certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+          p12-password: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Download Provisioning Profiles
+        uses: apple-actions/download-provisioning-profiles@v1
+        with:
+          bundle-id: 'com.sdercolin.recstarS7CF8UHY7B'
+          profile-type: 'IOS_APP_STORE'
+          issuer-id: ${{ secrets.PRIVATE_API_KEY_ISSUER_ID }}
+          api-key-id: ${{ secrets.PRIVATE_API_KEY_ID }}
+          api-private-key: ${{ secrets.PRIVATE_API_KEY }}
+
+      - name: Set Team ID
+        run: |
+          sed -i '' "s/\[MY_TEAM_ID\]/${{ secrets.APPLE_TEAM_ID }}/" iosApp/ExportOptions.plist
+          sed -i '' "s/^TEAM_ID=$/TEAM_ID=${{ secrets.APPLE_TEAM_ID }}/" iosApp/Configuration/Config.xcconfig
+
+      - name: Build and Export IPA
+        run: |
+          xcodebuild archive \
+            -scheme "iosApp" \
+            -project "iosApp.xcodeproj" \
+            -configuration Release \
+            -archivePath "build/ios.xcarchive" \
+            -sdk iphoneos \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="RecStar App Store Real"
+
+          mkdir -p build/ipa
+          xcodebuild -exportArchive \
+            -archivePath "build/ios.xcarchive" \
+            -exportOptionsPlist "ExportOptions.plist" \
+            -exportPath "build/ipa"
+
+          mv build/ipa/*.ipa build/recstar-${{ env.APP_VERSION }}.ipa
+        working-directory: iosApp
+
+      - name: Upload app to TestFlight
+        uses: apple-actions/upload-testflight-build@v1
+        with:
+          app-path: iosApp/build/recstar-${{ env.APP_VERSION }}.ipa
+          issuer-id: ${{ secrets.PRIVATE_API_KEY_ISSUER_ID }}
+          api-key-id: ${{ secrets.PRIVATE_API_KEY_ID }}
+          api-private-key: ${{ secrets.PRIVATE_API_KEY }}

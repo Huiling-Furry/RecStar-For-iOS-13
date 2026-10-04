@@ -1,0 +1,82 @@
+name: Generate Gradle Dependency Lock
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lock:
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          set -euo pipefail
+          selected=""
+          for v in 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_${v}.app" ]; then
+              selected="/Applications/Xcode_${v}.app"
+              break
+            fi
+          done
+          if [ -z "$selected" ]; then
+            echo "::error::Xcode 16.x was not found on this runner"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$selected"
+          xcodebuild -version
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "corretto"
+
+      - name: Generate lockfile on macOS
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-home
+        run: |
+          set -euo pipefail
+          rm -f gradle.lockfile
+          # Configure every source set, including iOS, before writing locks.
+          ./gradlew projects :shared:tasks -Dos.name="Mac OS X"
+          ./gradlew --write-locks --refresh-dependencies \
+            :shared:dependencies \
+            :shared:iosArm64MainBinaries \
+            :shared:iosSimulatorArm64MainBinaries \
+            :shared:iosX64MainBinaries \
+            :shared:compileKotlinDesktop
+          find . -name gradle.lockfile -not -path './.gradle/*' -print | sort > "$RUNNER_TEMP/lockfiles.txt"
+          test -s "$RUNNER_TEMP/lockfiles.txt" || {
+            echo "::error::No Gradle lockfile was generated"
+            exit 1
+          }
+          tar -czf "$RUNNER_TEMP/gradle-lockfiles-macos.tar.gz" $(cat "$RUNNER_TEMP/lockfiles.txt")
+          echo "Generated lockfiles:"
+          while IFS= read -r lockfile; do
+            wc -l "$lockfile"
+          done < "$RUNNER_TEMP/lockfiles.txt"
+
+      - name: Upload Gradle lockfiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: recstar-gradle-lockfile-macos
+          path: |
+            ${{ runner.temp }}/gradle-lockfiles-macos.tar.gz
+            **/gradle.lockfile
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Explain next step
+        run: |
+          echo "Download the recstar-gradle-lockfile-macos artifact."
+          echo "Copy each generated gradle.lockfile back to its matching project directory."
+          echo "For this multi-project build, the lockfile may be under shared/ rather than the repository root."
+          echo "This workflow intentionally does not push changes back to the repository."

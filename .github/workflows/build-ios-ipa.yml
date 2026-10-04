@@ -1,0 +1,350 @@
+name: Build iOS IPA (iOS 13)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios_deployment_target:
+        description: "iOS deployment target"
+        required: true
+        default: "13.0"
+      configuration:
+        description: "Build configuration"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+      sign:
+        description: "签名打包（需先配置仓库 Secrets）。关闭则产出未签名 IPA，需本地自签后才能安装"
+        required: true
+        default: false
+        type: boolean
+      signing_identity:
+        description: "证书身份（sign=true 时生效）"
+        required: true
+        default: "Apple Development"
+        type: choice
+        options:
+          - Apple Development
+          - iPhone Developer
+          - Apple Distribution
+          - iPhone Distribution
+      export_method:
+        description: "导出方式（sign=true 时生效）"
+        required: true
+        default: "development"
+        type: choice
+        options:
+          - development
+          - ad-hoc
+          - app-store
+          - enterprise
+      bundle_id:
+        description: "Bundle ID 前缀，最终 ID 为 前缀+TEAM_ID"
+        required: true
+        default: "com.sdercolin.recstar"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    env:
+      SIGN: ${{ inputs.sign }}
+      IDENTITY: ${{ inputs.signing_identity }}
+      METHOD: ${{ inputs.export_method }}
+      BUNDLE_ID: ${{ inputs.bundle_id }}
+      TEAM_ID: ${{ secrets.TEAM_ID }}
+      KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check dependency lockfiles
+        run: |
+          set -euo pipefail
+          find . -name gradle.lockfile -not -path './.gradle/*' -print | sort > "$RUNNER_TEMP/lockfiles.txt"
+          if [ -s "$RUNNER_TEMP/lockfiles.txt" ]; then
+            echo "Using committed Gradle dependency lockfiles"
+            cat "$RUNNER_TEMP/lockfiles.txt"
+            while IFS= read -r lockfile; do
+              wc -l "$lockfile"
+            done < "$RUNNER_TEMP/lockfiles.txt"
+          else
+            echo "::warning::No gradle.lockfile is committed; dependency resolution is pinned only by declared versions"
+            echo "Run the Generate Gradle Dependency Lock workflow on macOS, then commit each downloaded lockfile to its original directory."
+          fi
+
+      # Xcode 16.x is used on purpose: it still accepts an iOS 13 deployment target.
+      # Newer Xcode versions may have raised the minimum supported deployment target.
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          selected=""
+          for v in 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_${v}.app" ]; then
+              selected="/Applications/Xcode_${v}.app"
+              break
+            fi
+          done
+          if [ -z "$selected" ]; then
+            echo "::error::Xcode 16.x was not found on this runner"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$selected"
+          echo "Selected Xcode: $selected"
+          xcode-select -p
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "corretto"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Validate signing inputs
+        if: ${{ inputs.sign }}
+        env:
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          IDENTITY: ${{ inputs.signing_identity }}
+          METHOD: ${{ inputs.export_method }}
+        run: |
+          set -euo pipefail
+          [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "::error::TEAM_ID must be a 10-character Apple Team ID"; exit 1; }
+          [[ "$BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "::error::bundle_id contains unsupported characters"; exit 1; }
+          [[ "$IDENTITY" =~ ^(Apple\ Development|iPhone\ Developer|Apple\ Distribution|iPhone\ Distribution)$ ]] || { echo "::error::Unsupported signing identity"; exit 1; }
+          [[ "$METHOD" =~ ^(development|ad-hoc|app-store|enterprise)$ ]] || { echo "::error::Unsupported export method"; exit 1; }
+          EXPECTED_BUNDLE_ID="${BUNDLE_ID}${TEAM_ID}"
+          echo "EXPECTED_BUNDLE_ID=$EXPECTED_BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "Signing bundle ID: $EXPECTED_BUNDLE_ID"
+
+      - name: Install signing assets
+        if: ${{ inputs.sign }}
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for v in TEAM_ID BUILD_CERTIFICATE_BASE64 P12_PASSWORD BUILD_PROVISION_PROFILE_BASE64; do
+            if [ -z "${!v:-}" ]; then echo "::error::Missing secret: $v"; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$RUNNER_TEMP/embedded.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/embedded.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :PayloadDisplayName' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")"
+          EXPECTED_PROFILE_APP_ID="${TEAM_ID}.${BUNDLE_ID}${TEAM_ID}"
+          [[ "$PROFILE_TEAM_ID" == "$TEAM_ID" ]] || {
+            echo "::error::Provisioning profile Team ID ($PROFILE_TEAM_ID) does not match TEAM_ID ($TEAM_ID)"
+            exit 1
+          }
+          [[ "$PROFILE_APP_ID" == "$EXPECTED_PROFILE_APP_ID" ]] || {
+            echo "::error::Provisioning profile App ID ($PROFILE_APP_ID) does not match $EXPECTED_PROFILE_APP_ID"
+            exit 1
+          }
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/embedded.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "Installed profile: $PROFILE_NAME ($PROFILE_UUID)"
+          echo "Validated profile App ID: $PROFILE_APP_ID"
+
+      - name: Build archive
+        working-directory: iosApp
+        run: |
+          set -euo pipefail
+          TARGET="${{ inputs.ios_deployment_target }}"
+          if [[ ! "$TARGET" =~ ^13(\.0)?$ ]]; then
+            echo "::error::This workflow is locked to iOS 13.0; received: $TARGET"
+            exit 1
+          fi
+          xcodebuild -list -project iosApp.xcodeproj
+          common=(
+            -project iosApp.xcodeproj
+            -scheme iosApp
+            -configuration "${{ inputs.configuration }}"
+            -sdk iphoneos
+            -archivePath "$RUNNER_TEMP/RecStar.xcarchive"
+            IPHONEOS_DEPLOYMENT_TARGET="$TARGET"
+            BUNDLE_ID="$BUNDLE_ID"
+            TEAM_ID="$TEAM_ID"
+          )
+          if [ "$SIGN" = "true" ]; then
+            xcodebuild archive "${common[@]}" \
+              CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="$IDENTITY" \
+              DEVELOPMENT_TEAM="$TEAM_ID" \
+              PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+              -quiet
+          else
+            xcodebuild archive "${common[@]}" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              EXPANDED_CODE_SIGN_IDENTITY="" \
+              -quiet
+          fi
+
+      - name: Export signed IPA
+        if: ${{ inputs.sign }}
+        run: |
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Clear" "$RUNNER_TEMP/ExportOptions.plist" 2>/dev/null || true
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>$METHOD</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>$IDENTITY</string>
+            <key>provisioningProfiles</key>
+            <dict><key>$BUNDLE_ID$TEAM_ID</key><string>$PROFILE_NAME</string></dict>
+            <key>stripSwiftSymbols</key><true/>
+            <key>uploadSymbols</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/RecStar.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -quiet
+          ls -lh "$RUNNER_TEMP/export"
+
+      - name: Validate archived app
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/RecStar.xcarchive/Products/Applications/RecStar.app"
+          INFO="$APP/Info.plist"
+          test -d "$APP"
+          MIN_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")"
+          ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")"
+          EXPECTED_VERSION="$(awk -F= '/^app.versionName=/ {print $2}' gradle.properties)"
+          EXPECTED_VERSION_CODE="$(awk -F= '/^app.versionCode=/ {print $2}' gradle.properties)"
+          ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")"
+          ACTUAL_VERSION_CODE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")"
+          [[ "$MIN_OS" == "13.0" ]] || { echo "::error::MinimumOSVersion is $MIN_OS, expected 13.0"; exit 1; }
+          [[ "$ACTUAL_VERSION" == "$EXPECTED_VERSION" ]] || { echo "::error::Version is $ACTUAL_VERSION, expected $EXPECTED_VERSION"; exit 1; }
+          [[ "$ACTUAL_VERSION_CODE" == "$EXPECTED_VERSION_CODE" ]] || { echo "::error::Version code is $ACTUAL_VERSION_CODE, expected $EXPECTED_VERSION_CODE"; exit 1; }
+          if [ "$SIGN" = "true" ]; then
+            [[ "$ACTUAL_BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] || {
+              echo "::error::Bundle ID is $ACTUAL_BUNDLE_ID, expected $EXPECTED_BUNDLE_ID"
+              exit 1
+            }
+            test -f "$APP/embedded.mobileprovision"
+            codesign --verify --deep --strict "$APP"
+            codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/archive-codesign.txt"
+            grep -q "Identifier=$EXPECTED_BUNDLE_ID" "$RUNNER_TEMP/archive-codesign.txt"
+            grep -q "TeamIdentifier=$TEAM_ID" "$RUNNER_TEMP/archive-codesign.txt"
+          fi
+          echo "Archive validated: bundle=$ACTUAL_BUNDLE_ID, minimumOS=$MIN_OS"
+          echo "== binary build version (minos) =="
+          vtool -show-build "$APP/RecStar"
+          echo "== iOS 14+ framework check =="
+          # AVFoundation is expected and fine on iOS 13.
+          # AVFAudio / UniformTypeIdentifiers / SwiftUI would mean an iOS 14+ framework slipped back in.
+          if otool -L "$APP/RecStar" | grep -i -E "AVFAudio|UniformTypeIdentifiers|SwiftUI"; then
+            echo "::error::An iOS 14+ framework is linked"
+            exit 1
+          fi
+          echo "OK: no iOS 14+ frameworks linked"
+
+      - name: Validate exported signed IPA
+        if: ${{ inputs.sign }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          IPA_FILES=("$RUNNER_TEMP"/export/*.ipa)
+          [[ "${#IPA_FILES[@]}" -eq 1 ]] || {
+            echo "::error::Expected exactly one exported IPA, found ${#IPA_FILES[@]}"
+            exit 1
+          }
+          IPA_DIR="$RUNNER_TEMP/ipa-validation"
+          rm -rf "$IPA_DIR"
+          mkdir -p "$IPA_DIR"
+          unzip -q "${IPA_FILES[0]}" -d "$IPA_DIR"
+          APP_FILES=("$IPA_DIR"/Payload/*.app)
+          [[ "${#APP_FILES[@]}" -eq 1 ]] || {
+            echo "::error::Expected exactly one app in IPA"
+            exit 1
+          }
+          APP="${APP_FILES[0]}"
+          INFO="$APP/Info.plist"
+          ACTUAL_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")"
+          [[ "$ACTUAL_BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] || {
+            echo "::error::Exported IPA Bundle ID is $ACTUAL_BUNDLE_ID, expected $EXPECTED_BUNDLE_ID"
+            exit 1
+          }
+          test -f "$APP/embedded.mobileprovision"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/exported-codesign.txt"
+          grep -q "Identifier=$EXPECTED_BUNDLE_ID" "$RUNNER_TEMP/exported-codesign.txt"
+          grep -q "TeamIdentifier=$TEAM_ID" "$RUNNER_TEMP/exported-codesign.txt"
+          echo "Signed IPA validated: ${IPA_FILES[0]}"
+
+      - name: Package unsigned IPA
+        if: ${{ !inputs.sign }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/RecStar.xcarchive/Products/Applications/RecStar.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "RecStar-unsigned.ipa" Payload
+          ls -lh "RecStar-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        if: ${{ !inputs.sign }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: RecStar-iOS13-unsigned-ipa
+          path: ${{ runner.temp }}/ipa/RecStar-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload signed IPA
+        if: ${{ inputs.sign }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: RecStar-iOS13-signed-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          if [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/embedded.mobileprovision" || true

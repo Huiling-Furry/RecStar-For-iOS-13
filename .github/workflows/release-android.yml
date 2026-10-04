@@ -1,0 +1,107 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+# This workflow will build a Java project with Gradle and cache/restore any dependencies to improve the workflow execution time
+# For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-gradle
+
+name: Release Android
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Get version
+        run: |
+          APP_VERSION=$(awk -F'=' '/^app.versionName/ {print $2}' gradle.properties)
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG=${{ env.APP_VERSION }}
+            if [ "$TAG" != "$APP_VERSION" ]; then
+              echo "Tag $TAG does not match app version $APP_VERSION"
+              exit 1
+            fi
+          fi
+          echo $(ls /usr/local/lib/android/sdk/build-tools/)
+
+      - name: Set Flavor
+        run: echo "buildkonfig.flavor=release" >> gradle.properties
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+
+      - name: Build APK with Gradle
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: assembleRelease
+
+      - uses: r0adkll/sign-android-release@v1
+        name: Sign apk file
+        id: sign_apk
+        with:
+          releaseDirectory: androidApp/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          alias: ${{ secrets.ANDROID_KEYSTORE_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEYSTORE_KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "35.0.0"
+
+      - name: Rename
+        run: |
+          VERSION=${{ env.APP_VERSION }}
+          OUTPUT_FILE=${{steps.sign_apk.outputs.signedReleaseFile}}
+          echo $VERSION
+          echo $OUTPUT_FILE
+          mv $OUTPUT_FILE ./recstar-$VERSION.apk
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          prerelease: true
+          files: recstar-${{ env.APP_VERSION }}.apk
+
+      - name: Build Bundle with Gradle
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: bundleRelease
+
+      - uses: r0adkll/sign-android-release@v1
+        name: Sign app aab file
+        id: sign_app
+        with:
+          releaseDirectory: androidApp/build/outputs/bundle/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          alias: ${{ secrets.ANDROID_KEYSTORE_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEYSTORE_KEY_PASSWORD }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Upload AAB file as artifact
+          path: ${{steps.sign_app.outputs.signedReleaseFile}}
+
+      - name: Upload to Google Play
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+          packageName: com.sdercolin.recstar
+          releaseFiles: ${{steps.sign_app.outputs.signedReleaseFile}}
+          track: beta
+          status: completed
