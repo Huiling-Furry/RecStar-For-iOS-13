@@ -162,7 +162,7 @@ PRODUCT_BUNDLE_IDENTIFIER = "${BUNDLE_ID}${TEAM_ID}"
 
 ## 六、未验证项与风险（请务必读）
 
-1. **iOS 真实编译已经做过，真机运行仍然没做过。** 已在 GitHub macOS runner 上真实完成 `:shared:compileKotlinIosArm64` 与 `xcodebuild archive`，并产出 IPA（见第十节）。**但"编译得过、装得上"不等于"跑得起来"**：真机上的录音、播放、文件选择器、旋转、权限弹窗、音频中断**一项都没验证过**。第一次装到 iOS 13 设备上，请先确认能不能开屏。
+1. **iOS 真实编译已做，真机运行也已在 iOS 13 设备上验证通过（2026-10-05 用户确认）。** 已在 GitHub macOS runner 上真实完成 `:shared:compileKotlinIosArm64` 与 `xcodebuild archive` 并产出 IPA；用户已装到 iOS 13 真机确认可正常启动、录音（一次点击授权）、播放、文件选择器、旋转、前后台切换均正常。Compose/Skiko 在 iOS 13 上的运行时风险至此关闭。唯一待重新确认的是听筒路由修复（commit `56ea33e`），需装在修复后的新 IPA 上复测。
 2. **Compose Multiplatform 1.5.10 的 iOS 运行时仍是最大未知项。** 它的 Kotlin 层经 Kotlin/Native 编译后最低版本是 12.0（`osVersionMin.ios_arm64`），不构成门槛；Skiko 原生层（Compose 1.5.10 对应的 0.7.34）目标文件版本标记是 11.0，也不构成门槛。但**如果 Compose 的 UIKit 桥接内部调用了某个 iOS 14+ 的 API，仍然可能运行期崩溃**。工作流的 `otool -L` 能查框架层依赖，查不了运行期 API；`strings` 扫描能发现明显的新 API 符号名，但 Kotlin/Native 走 cinterop 发 ObjC 消息，**编译器不做 availability 检查**，调了 iOS 14+ API 照样编译通过，只在老设备上崩。这是 CI 堵不死的洞，只能靠人工审查 + 真机。
 3. **iOS 13 模拟器现在基本拿不到**（现代 Xcode 不再提供 iOS 13 的 simulator runtime），请用**真机**验证。
 4. 未签名 IPA 无法直接安装，需要用 AltStore / Sideloadly / TrollStore 之类的工具自签；已签名 IPA 则受你证书对应的设备白名单约束。
