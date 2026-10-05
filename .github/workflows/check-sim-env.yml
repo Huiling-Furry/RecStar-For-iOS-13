@@ -1,0 +1,27 @@
+name: check-sim-env
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Probe simulator runtimes and SDKs
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Report environment
+        run: |
+          echo "== Xcode =="
+          ls -d /Applications/Xcode*.app 2>/dev/null || true
+          sudo xcode-select -s /Applications/Xcode_16.app
+          xcodebuild -version
+          echo "== Installed platforms =="
+          ls /Applications/Xcode_16.app/Contents/Developer/Platforms 2>/dev/null || true
+          echo "== iPhoneSimulator SDK versions =="
+          ls /Applications/Xcode_16.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs 2>/dev/null || true
+          echo "== xcodebuild -showsdks =="
+          xcodebuild -showsdks 2>/dev/null || true
+          echo "== simctl runtimes =="
+          xcrun simctl list runtimes
+          echo "== simctl devices (booted/available) =="
+          xcrun simctl list devices available | head -40
